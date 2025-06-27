@@ -10,4 +10,4 @@ Cargo.lock
 *.swo
 
 # Project specific
-devnet-wallet.json
+dev-wallet.json
