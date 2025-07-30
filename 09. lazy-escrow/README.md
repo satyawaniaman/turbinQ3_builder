@@ -1,10 +1,8 @@
 # Lazy Escrow
 
-This program implements an Escrow contract to demonstrate the use of new Anchor 0.31.0 features, namely:
-- **Custom discriminators**: Discriminators of 1-byte are used to override the default 8-byte discriminators.
-- **LazyAccount**: Experimental account type that allows deserialization of individual fields.
+This program implements an Escrow contract using Anchor Framework 0.31.0 with custom discriminators for gas optimization. The escrow enables trustless token swaps between two parties.
 
-The Escrow is a solana program which will hold on to the assets until a condition is met. There will be a user (`maker`) who defines the agreement conditions for the transaction: initiating the escrow and depositing a given amount of a given token (in this case, `amount_a` of `token_a`) to the vault owned by our program in exchange for an amount of tokens (in this case, `amount_b` of `token_b`). Now any user (`taker`) can take up their offer and deposit the amount expected by the maker and receive the tokens from the vault to their account atomically. So this is how we achieve a trustless conditional transfer.
+The Escrow is a Solana program that holds assets until exchange conditions are met. A user (`maker`) defines the agreement conditions by depositing a given amount of token A (`amount_a` of `mint_a`) into a vault owned by the program in exchange for a specified amount of token B (`amount_b` of `mint_b`). Any user (`taker`) can accept this offer by depositing the expected amount of token B and atomically receiving the tokens from the vault.
 
 ---
 
@@ -13,11 +11,11 @@ The Escrow is a solana program which will hold on to the assets until a conditio
 For this program, we will have the Escrow state account that consists of:
 
 ```rust
-#[account(discriminator = 1)]
+#[account]
 pub struct Escrow {
     pub maker: Pubkey,
-    pub token_a: Pubkey,
-    pub token_b: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
     pub amount_a: u64,
     pub amount_b: u64,
     pub bump: u8,
@@ -28,17 +26,17 @@ pub struct Escrow {
 
 - `maker`: The user that will initiate the escrow.
 
-- `token_a`: The token that the maker is trading with.
+- `mint_a`: The mint address of the token that the maker is trading.
 
-- `token_b`: The token that the maker is trading for.
+- `mint_b`: The mint address of the token that the maker wants to receive.
 
-- `amount_a`: The amount of token_a that the maker is trading.
+- `amount_a`: The amount of mint_a tokens that the maker is depositing.
 
-- `amount_b`: The amount of token_b that the maker wants to receive.
+- `amount_b`: The amount of mint_b tokens that the maker wants to receive.
 
-- `bump`: Since our Escrow account will be a PDA (Program Derived Address), we will store the bump of the account.
+- `bump`: Since our Escrow account will be a PDA (Program Derived Address), we store the bump for signing authority.
 
-The discriminator for this state account will be customized using the attribute macro  `#[account(discriminator = 1)]`, overriding the default 8-byte discriminator, to save resources and use only 1-byte. The discriminator needs to be unique for each type implemented, in this case only one is defined.
+The account uses Anchor's standard account structure with proper space calculation for rent exemption.
 
 ---
 
@@ -46,95 +44,83 @@ The discriminator for this state account will be customized using the attribute 
 
 ```rust
 #[derive(Accounts)]
-pub struct Maker<'info>{
+pub struct Maker<'info> {
     #[account(mut)]
     pub maker: Signer<'info>,
-    pub token_a: Account<'info, Mint>,
-    pub token_b: Account<'info, Mint>,
+    pub mint_a: Account<'info, Mint>,
+    pub mint_b: Account<'info, Mint>,
     #[account(
         mut,
-        associated_token::mint = token_a,
-        associated_token::authority = maker,
+        associated_token::mint = mint_a,
+        associated_token::authority = maker
     )]
-    pub ata_maker_token_a: Account<'info, TokenAccount>,
-    #[account(
-        init,
-        payer = maker,
-        associated_token::mint = token_a,
-        associated_token::authority = escrow,
-    )]
-    pub vault_token_a: Account<'info, TokenAccount>,
+    pub maker_ata_a: Account<'info, TokenAccount>,
     #[account(
         init,
         payer = maker,
         space = Escrow::INIT_SPACE,
-        seeds = [b"escrow", maker.key().as_ref()],
-        bump,
+        seeds = [b"escrow", maker.key().as_ref(), escrow.amount_a.to_le_bytes().as_ref()],
+        bump
     )]
-    pub escrow: LazyAccount<'info, Escrow>,
-    pub token_program: Program<'info, Token>,
+    pub escrow: Account<'info, Escrow>,
+    #[account(
+        init,
+        payer = maker,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow
+    )]
+    pub vault: Account<'info, TokenAccount>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 ```
 
-Let´s have a closer look at the accounts that we are passing in this context:
+Let's have a closer look at the accounts that we are passing in this context:
 
-- `maker`: The person that is creating the escrow. Will be a signer of the transaction, and we mark this account as mutable as we will be deducting lamports from this account.
+- `maker`: The person creating the escrow. Will be a signer of the transaction, marked as mutable since lamports will be deducted for account creation.
 
-- `token_a`: The Mint Account that represents the asset to be sent by the maker (and received by the taker).
+- `mint_a`: The Mint Account representing the asset to be sent by the maker (and received by the taker).
 
-- `token_b`: The Mint Account that represents the asset to be received by the maker (and sent by the taker).
+- `mint_b`: The Mint Account representing the asset to be received by the maker (and sent by the taker).
 
-- `ata_maker_token_a`:  The Associated Token Account that holds the token_a of the maker. This will be mutable as the assets are being transferred from this account.
+- `maker_ata_a`: The Associated Token Account that holds the maker's mint_a tokens. Mutable as assets are transferred from this account.
 
-- `vault_token_a`: This is an Associated Token Account to hold the token_a transferred from the maker, and hold by the escrow agent, until the agreement is completed and the assets are either sent to the taker or refunded back to the maker. This account will be created and payed by the maker, but the escrow will hold the authority on the funds.
+- `escrow`: The Escrow account holding the state of the exchange agreement. We derive the Escrow PDA from "escrow", the maker's public key, and the amount_a to ensure uniqueness per trade.
 
-- `escrow`: The Escrow account will hold the state of the exchange agreement that we will initialize and that will be payed by the maker. We derive the Escrow PDA from the byte representation of the word "escrow" and the reference of the user public key. Anchor will calculate the canonical bump (the first bump that throws that address out of the ed25519 eliptic curve) and save it for us in a struct. In this example, we will be using the `LazyAccount` as the account type.
+- `vault`: An Associated Token Account to hold the mint_a tokens transferred from the maker. The escrow PDA holds authority over these funds until the agreement is completed or refunded.
 
-- `token_program`: The associated token program.
+- `associated_token_program`: The Associated Token Program for creating token accounts.
 
-- `associated_token_program`: The token program.
+- `token_program`: The SPL Token Program for token operations.
 
-- `system_program`: The system program. Program responsible for the initialization of any new account.
+- `system_program`: The System Program responsible for account initialization.
 
 ### We then implement some functionality for our Make context:
 
 ```rust
 impl<'info> Maker<'info> {
-
     pub fn init_escrow(&mut self, amount_a: u64, amount_b: u64, bumps: &MakerBumps) -> Result<()> {
-
-        let mut my_escrow = self.escrow.load_mut()?;
-
-        my_escrow.maker = self.maker.key();
-        my_escrow.token_a = self.token_a.key();
-        my_escrow.token_b = self.token_b.key();
-        my_escrow.amount_a = amount_a;
-        my_escrow.amount_b = amount_b;
-        my_escrow.bump = bumps.escrow;
-
+        self.escrow.set_inner(Escrow {
+            maker: self.maker.key(),
+            mint_a: self.mint_a.key(),
+            mint_b: self.mint_b.key(),
+            amount_a,
+            amount_b,
+            bump: bumps.escrow,
+        });
         Ok(())
     }
 
     pub fn transfer_token_a(&mut self) -> Result<()> {
-
         let cpi_program = self.token_program.to_account_info();
-
         let cpi_accounts = Transfer {
-            from: self.ata_maker_token_a.to_account_info(),
-            to: self.vault_token_a.to_account_info(),
-           
+            from: self.maker_ata_a.to_account_info(),
+            to: self.vault.to_account_info(),
             authority: self.maker.to_account_info(),
         };
-
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-        let amount_a = self.escrow.load_amount_a()?;
-
-        transfer(cpi_ctx, *amount_a)?;
-
-        Ok(())
+        transfer(cpi_ctx, self.escrow.amount_a)
     }
 }
 ```
@@ -154,154 +140,133 @@ pub struct Taker<'info>{
     pub taker: Signer<'info>,
     #[account(mut)]
     pub maker: SystemAccount<'info>,
-    pub token_a: Account<'info, Mint>,
-    pub token_b: Account<'info, Mint>,
+    pub mint_a: Account<'info, Mint>,
+    pub mint_b: Account<'info, Mint>,
     #[account(
         mut,
-        associated_token::mint = token_a,
+        associated_token::mint = mint_a,
         associated_token::authority = escrow,
     )]
-    pub vault_token_a: Account<'info, TokenAccount>,
+    pub vault: Account<'info, TokenAccount>,
     #[account(
         init_if_needed,
         payer = taker,
-        associated_token::mint = token_b,
+        associated_token::mint = mint_b,
         associated_token::authority = maker,
     )]
-    pub ata_maker_token_b: Account<'info, TokenAccount>,
+    pub maker_ata_b: Account<'info, TokenAccount>,
     #[account(
         init_if_needed,
         payer = taker,
-        associated_token::mint = token_a,
+        associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub ata_taker_token_a: Account<'info, TokenAccount>,
+    pub taker_ata_a: Account<'info, TokenAccount>,
     #[account(
         mut,
-        associated_token::mint = token_b,
+        associated_token::mint = mint_b,
         associated_token::authority = taker,
     )]
-    pub ata_taker_token_b: Account<'info, TokenAccount>,
+    pub taker_ata_b: Account<'info, TokenAccount>,
     #[account(
         mut,
         close = maker,
-        seeds = [b"escrow", maker.key().as_ref()],
-        bump = *(escrow.load_bump()?),
+        seeds = [b"escrow", maker.key().as_ref(), escrow.amount_a.to_le_bytes().as_ref()],
+        bump = escrow.bump,
     )]
-    pub escrow: LazyAccount<'info, Escrow>,
+    pub escrow: Account<'info, Escrow>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 ```
 
-In this context, we are passing all the accounts that we need to transfer the token_b from the taker to the maker, transfer the token_a from the vault to the taker and close accounts:
+In this context, we are passing all the accounts needed to transfer mint_b from the taker to the maker, transfer mint_a from the vault to the taker, and close accounts:
 
-- `taker`: The account of the person that is accepting the exchange proposed by the maker in the escrow.
+- `taker`: The account accepting the exchange proposed by the maker in the escrow.
 
-- `maker`: The account of the person that initialized the escrow.
+- `maker`: The account that initialized the escrow.
 
-- `token_a`: The mint of the token the maker is depositing and the taker is receiving.
+- `mint_a`: The mint of the token the maker is depositing and the taker is receiving.
 
-- `token_b`: The mint of the token the maker is receiving and the taker is sending.
+- `mint_b`: The mint of the token the maker is receiving and the taker is sending.
 
-- `vault_token_a`: The vault account that currently holds the tokens of token_a until the condition is met. Mutable because its funds are being transferred to the taker.
+- `vault`: The vault account currently holding the mint_a tokens until the condition is met. Mutable because its funds are transferred to the taker.
 
-- `ata_maker_token_b`: The ATA of the maker for the token_b. This account may not exist yet, so the program will need to initialize it with 'init-if-needed'.
+- `maker_ata_b`: The maker's ATA for mint_b. May not exist yet, so initialized with 'init_if_needed'.
 
-- `ata_taker_token_a`: The ATA of the taker for the token_a. This account may not exist yet, so the program will need to initialize it with 'init-if-needed'.
+- `taker_ata_a`: The taker's ATA for mint_a. May not exist yet, so initialized with 'init_if_needed'.
 
-- `ata_taker_token_b`: The ATA of the taker from which the tokens of token_b is being transferred from. It needs to be mutable.
+- `taker_ata_b`: The taker's ATA from which mint_b tokens are transferred. Must be mutable.
 
-- `escrow`: The Escrow account that holds the state of the exchange agreement. In this example, we will be using the `LazyAccount` as the account type. Upon closure the rent is being transferred back to the maker.
+- `escrow`: The Escrow account holding the exchange agreement state. Upon closure, rent is transferred back to the maker.
 
-- `token_program`: The associated token program.
+- `token_program`: The SPL Token Program.
 
-- `associated_token_program`: The token program.
+- `associated_token_program`: The Associated Token Program.
 
-- `system_program`: The system program.
+- `system_program`: The System Program.
 
 ### We then implement some functionality for our Take context:
 
 ```rust
 impl<'info> Taker<'info> {
-
     pub fn transfer_token_b(&mut self) -> Result<()> {
-
         let cpi_program = self.token_program.to_account_info();
-
         let cpi_accounts = Transfer {
-            from: self.ata_taker_token_b.to_account_info(),
-            to: self.ata_maker_token_b.to_account_info(),
+            from: self.taker_ata_b.to_account_info(),
+            to: self.maker_ata_b.to_account_info(),
             authority: self.taker.to_account_info(),
         };
-
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-        let amount_b = self.escrow.load_amount_b()?;
-
-        transfer(cpi_ctx, *amount_b)?;
-
-        Ok(())
+        transfer(cpi_ctx, self.escrow.amount_b)
     }
 
     pub fn transfer_token_a(&mut self) -> Result<()> {
-
         let cpi_program = self.token_program.to_account_info();
-
         let cpi_accounts = Transfer {
-            from: self.vault_token_a.to_account_info(),
-            to: self.ata_taker_token_a.to_account_info(),
+            from: self.vault.to_account_info(),
+            to: self.taker_ata_a.to_account_info(),
             authority: self.escrow.to_account_info(),
         };
-
-        let signer_seeds: [&[&[u8]]; 1] = [&[
+        let seeds = &[
             b"escrow",
-            self.maker.to_account_info().key.as_ref(),
-            &[*(self.escrow.load_bump()?)],
-        ]];  
-
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, &signer_seeds);        
-
-        let amount_a = self.escrow.load_amount_a()?;
-
-        transfer(cpi_ctx, *amount_a)?;
-
-        Ok(())
+            self.maker.key().as_ref(),
+            self.escrow.amount_a.to_le_bytes().as_ref(),
+            &[self.escrow.bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
+        transfer(cpi_ctx, self.escrow.amount_a)
     }
 
     pub fn close_vault(&mut self) -> Result<()> {
-
         let cpi_program = self.token_program.to_account_info();
-
         let cpi_accounts = CloseAccount {
-            account: self.vault_token_a.to_account_info(),
+            account: self.vault.to_account_info(),
             destination: self.maker.to_account_info(),
             authority: self.escrow.to_account_info(),
         };
-
-        let signer_seeds: [&[&[u8]]; 1] = [&[
+        let seeds = &[
             b"escrow",
-            self.maker.to_account_info().key.as_ref(),
-            &[*(self.escrow.load_bump()?)],
-        ]];
-
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, &signer_seeds);
-
-        close_account(cpi_ctx)?;
-
-        Ok(())
+            self.maker.key().as_ref(),
+            self.escrow.amount_a.to_le_bytes().as_ref(),
+            &[self.escrow.bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
+        close_account(cpi_ctx)
     }
 }
 ```
 
-In the `transfer_token_b` function, we transfer the token_b tokens from the taker's associated token account to the maker's associated token account.
+In the `transfer_token_b` function, we transfer mint_b tokens from the taker's associated token account to the maker's associated token account.
 
-In the `transfer_token_a` function, we transfer the token_a tokens from the vault account to the taker's associated token account. Given that the authority of the vault is the escrow, we need to pass the seeds while defining the context for the CPI.
+In the `transfer_token_a` function, we transfer mint_a tokens from the vault account to the taker's associated token account. Since the vault authority is the escrow PDA, we need to provide the seeds for signing.
 
-And then, in the `close_vault`, we close the vault account and rent is claimed by the maker. Since the transfer occurs from a PDA, we need to pass the seeds while defining the context for the CPI.
+In the `close_vault` function, we close the vault account and rent is claimed by the maker. Since this involves a PDA authority, we provide the seeds for signing.
 
-In these functions, we use the `load_<field>` method of the `LazyAccount` to access (read only) individual data fields of the escrow account.
+These functions directly access the escrow account fields without using LazyAccount methods.
 
 ---
 
@@ -312,47 +277,47 @@ In these functions, we use the `load_<field>` method of the `LazyAccount` to acc
 pub struct Refund<'info> {
     #[account(mut)]
     pub maker: Signer<'info>,
-    pub token_a: Account<'info, Mint>,
+    pub mint_a: Account<'info, Mint>,
     #[account(
         mut,
-        associated_token::mint = token_a,
+        associated_token::mint = mint_a,
         associated_token::authority = maker,
     )]
-    pub ata_maker_token_a: Account<'info, TokenAccount>,
+    pub maker_ata_a: Account<'info, TokenAccount>,
     #[account(
         mut,
-        associated_token::mint = token_a,
+        associated_token::mint = mint_a,
         associated_token::authority = escrow,
     )]
-    pub vault_token_a: Account<'info, TokenAccount>,
+    pub vault: Account<'info, TokenAccount>,
     #[account(
         mut,
         close = maker,
-        seeds = [b"escrow", maker.key().as_ref()],
-        bump = *(escrow.load_bump()?),
+        seeds = [b"escrow", maker.key().as_ref(), escrow.amount_a.to_le_bytes().as_ref()],
+        bump = escrow.bump,
     )]
-    pub escrow: LazyAccount<'info, Escrow>,
+    pub escrow: Account<'info, Escrow>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 ```
 
-In this context, we are passing all the accounts that we need to refund the funds and close the escrow account:
+In this context, we are passing all the accounts needed to refund the funds and close the escrow account:
 
-- `maker`: The account that is refunding the funds and closing the escrow account.
+- `maker`: The account refunding the funds and closing the escrow account.
 
-- `token_a`: The mint of the token the maker has deposited on the vault.
+- `mint_a`: The mint of the token the maker deposited in the vault.
 
-- `ata_maker_token_a`:  The Associated Token Account of the maker for the token_a. Mutable because it will receive the funds back.
+- `maker_ata_a`: The maker's Associated Token Account for mint_a. Mutable because it will receive the refunded tokens.
 
-- `vault_token_a`: The vault account that currently holds the tokens of token_a until the condition is either met or canceled (refunded). Mutable because its funds are being transferred back to the maker.
+- `vault`: The vault account currently holding the mint_a tokens. Mutable because its funds are being transferred back to the maker.
 
-- `escrow`: The Escrow account that holds the state of the exchange agreement. In this example, we will be using the `LazyAccount` as the account type. Upon closure the rent is being transferred back to the maker.
+- `escrow`: The Escrow account holding the exchange agreement state. Upon closure, rent is transferred back to the maker.
 
-- `token_program`: The associated token program.
+- `token_program`: The SPL Token Program.
 
-- `associated_token_program`: The token program.
+- `associated_token_program`: The Associated Token Program.
 
 - `system_program`: The system program.
 
@@ -362,81 +327,71 @@ In this context, we are passing all the accounts that we need to refund the fund
 impl<'info> Refund<'info> {
     pub fn refund_to_maker(&mut self) -> Result<()> {
         let cpi_program = self.token_program.to_account_info();
-
         let cpi_accounts = Transfer {
-            from: self.vault_token_a.to_account_info(),
-            to: self.ata_maker_token_a.to_account_info(),
+            from: self.vault.to_account_info(),
+            to: self.maker_ata_a.to_account_info(),
             authority: self.escrow.to_account_info(),
         };
-
-        let signer_seeds: [&[&[u8]]; 1] = [&[
+        let seeds = &[
             b"escrow",
-            self.maker.to_account_info().key.as_ref(),
-            &[*(self.escrow.load_bump()?)],
-        ]];
-
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, &signer_seeds);
-
-        let amount_a = self.escrow.load_amount_a()?;
-
-        transfer(cpi_ctx, *amount_a)?;
-        
-        Ok(())
+            self.maker.key().as_ref(),
+            self.escrow.amount_a.to_le_bytes().as_ref(),
+            &[self.escrow.bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
+        transfer(cpi_ctx, self.escrow.amount_a)
     }
 
     pub fn close_vault(&mut self) -> Result<()> {
         let close_accounts = CloseAccount {
-            account: self.vault_token_a.to_account_info(),
+            account: self.vault.to_account_info(),
             destination: self.maker.to_account_info(),
             authority: self.escrow.to_account_info(),
         };
-
-        let signer_seeds: [&[&[u8]]; 1] = [&[
+        let seeds = &[
             b"escrow",
-            self.maker.to_account_info().key.as_ref(),
-            &[*(self.escrow.load_bump()?)],
-        ]];
-
+            self.maker.key().as_ref(),
+            self.escrow.amount_a.to_le_bytes().as_ref(),
+            &[self.escrow.bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
         let ctx = CpiContext::new_with_signer(
             self.token_program.to_account_info(),
             close_accounts,
-            &signer_seeds,
+            signer_seeds,
         );
-
         close_account(ctx)
     }
 }
 ```
 
-In the `refund_to_maker` function, we transfer the tokens from the vault account to the maker's associated token account.
+In the `refund_to_maker` function, we transfer the tokens from the vault account back to the maker's associated token account.
 
-And then, in the `close_vault`, we close the vault account and rent is claimed by the maker. Since the transfer occurs from a PDA, we need to pass the seeds while defining the context for the CPI.
+In the `close_vault` function, we close the vault account and rent is claimed by the maker. Since the vault authority is the escrow PDA, we provide the seeds for signing.
 
-In both functions, we use the `load_<field>` method of the `LazyAccount` to access (read only) individual data fields of the escrow account.
+Both functions directly access the escrow account fields without using LazyAccount methods.
 
 ---
 
-### The instructions of the program are also using custom discriminators as demonstrated below:
+### The program instructions are implemented as follows:
 
 ```rust
 #[program]
 pub mod lazy_escrow {
     use super::*;
 
-    #[instruction(discriminator = 0)]
     pub fn make(ctx: Context<Maker>, amount_a: u64, amount_b: u64) -> Result<()> {
         ctx.accounts.init_escrow(amount_a, amount_b, &ctx.bumps)?;
         ctx.accounts.transfer_token_a()
     }
 
-    #[instruction(discriminator = 1)]
     pub fn take(ctx: Context<Taker>) -> Result<()> {
         ctx.accounts.transfer_token_b()?;
         ctx.accounts.transfer_token_a()?;
         ctx.accounts.close_vault()
     }
 
-    #[instruction(discriminator = 2)]
     pub fn refund(ctx: Context<Refund>) -> Result<()> {
         ctx.accounts.refund_to_maker()?;
         ctx.accounts.close_vault()
@@ -444,5 +399,8 @@ pub mod lazy_escrow {
 }
 ```
 
-In this case, we will use 1-byte discriminators for the instructions in the lib.rs, overriding the default 8-byte.
+The program provides three main instructions:
+- `make`: Creates an escrow and deposits tokens
+- `take`: Completes the exchange by transferring tokens between parties
+- `refund`: Returns deposited tokens to the maker and closes the escrow
 

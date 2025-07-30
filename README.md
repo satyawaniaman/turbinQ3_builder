@@ -46,15 +46,27 @@ A collection of 8 progressive Solana projects demonstrating:
 - `withdraw` — Transfers SOL from vault PDA back to user
 - `close` — Closes vault and returns rent to user
 
-### 🤝 05. Anchor Escrow
-**Trustless token exchange protocol**
+### 🤝 05. Anchor Escrow (Lazy Implementation)
+**Advanced trustless token exchange protocol with resource optimization**
 
 **Features:**
-- ✅ Atomic token swaps between parties
-- ✅ Escrow state management with PDAs
-- ✅ Secure fund holding until completion
-- ✅ Refund mechanism for failed trades
-- ✅ Production-ready error handling
+- ✅ **Lazy Account Loading**: Efficient memory usage with on-demand field access
+- ✅ **Custom Discriminators**: 1-byte discriminators for gas optimization
+- ✅ **Atomic Token Swaps**: Secure two-party token exchanges
+- ✅ **PDA-Based Security**: Program Derived Addresses for escrow state
+- ✅ **Vault Management**: Secure token holding with proper authority
+- ✅ **Refund Mechanism**: Safe fund recovery for incomplete trades
+- ✅ **Production-Ready**: Comprehensive error handling and validation
+
+**Core Instructions:**
+- `make` — Create escrow and deposit tokens for exchange
+- `take` — Complete the trade by providing counter-tokens
+- `refund` — Cancel escrow and return deposited tokens
+
+**Key Architecture:**
+- **Escrow State**: Stores maker, token mints, amounts, and bump seed
+- **Vault Account**: Secure PDA holding deposited tokens
+- **Resource Efficient**: Lazy loading minimizes compute usage
 
 ### 💱 06. AMM (Automated Market Maker)
 **Constant product AMM implementation (x*y=k)**
