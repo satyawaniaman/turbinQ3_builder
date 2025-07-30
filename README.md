@@ -23,6 +23,7 @@ A collection of 8 progressive Solana projects demonstrating:
 ├── 06. AMM/                   # Automated Market Maker
 ├── 07. nft_staking/           # NFT Staking Protocol
 ├── 08. marketplace/           # NFT Marketplace
+├── 09. lazy-escrow/           # Advanced Lazy Escrow
 └── README.md
 ```
 
@@ -46,12 +47,10 @@ A collection of 8 progressive Solana projects demonstrating:
 - `withdraw` — Transfers SOL from vault PDA back to user
 - `close` — Closes vault and returns rent to user
 
-### 🤝 05. Anchor Escrow (Lazy Implementation)
-**Advanced trustless token exchange protocol with resource optimization**
+### 🤝 05. Anchor Escrow (Basic Implementation)
+**Trustless token exchange protocol**
 
 **Features:**
-- ✅ **Lazy Account Loading**: Efficient memory usage with on-demand field access
-- ✅ **Custom Discriminators**: 1-byte discriminators for gas optimization
 - ✅ **Atomic Token Swaps**: Secure two-party token exchanges
 - ✅ **PDA-Based Security**: Program Derived Addresses for escrow state
 - ✅ **Vault Management**: Secure token holding with proper authority
@@ -62,11 +61,6 @@ A collection of 8 progressive Solana projects demonstrating:
 - `make` — Create escrow and deposit tokens for exchange
 - `take` — Complete the trade by providing counter-tokens
 - `refund` — Cancel escrow and return deposited tokens
-
-**Key Architecture:**
-- **Escrow State**: Stores maker, token mints, amounts, and bump seed
-- **Vault Account**: Secure PDA holding deposited tokens
-- **Resource Efficient**: Lazy loading minimizes compute usage
 
 ### 💱 06. AMM (Automated Market Maker)
 **Constant product AMM implementation (x*y=k)**
@@ -138,6 +132,29 @@ pub fn withdraw(ctx: Context<Withdraw>, lp_amount: u64, min_x: u64, min_y: u64) 
 - **Marketplace**: Admin and fee configuration
 - **Listing**: Individual NFT sale records
 - **Treasury**: Fee collection account
+
+### 🔄 09. Lazy Escrow
+**Advanced resource-optimized escrow implementation**
+
+**Features:**
+- ✅ **Memory Efficient**: LazyAccount pattern for reduced compute usage
+- ✅ **Custom Discriminators**: 1-byte discriminators for gas optimization
+- ✅ **On-Demand Loading**: Fields loaded only when accessed
+- ✅ **Atomic Swaps**: Secure two-party token exchanges
+- ✅ **PDA Security**: Program Derived Addresses for state management
+- ✅ **Vault Authority**: Secure token holding with proper CPI authority
+- ✅ **Refund Safety**: Complete fund recovery mechanism
+
+**Core Instructions:**
+- `make` — Initialize escrow with token deposit and exchange parameters
+- `take` — Execute trade by providing counter-tokens and completing swap
+- `refund` — Cancel escrow and safely return all deposited tokens
+
+**Advanced Architecture:**
+- **LazyAccount Pattern**: Efficient memory usage with selective field loading
+- **Custom State Management**: Optimized account structure with bump seeds
+- **Resource Optimization**: Minimized compute units through lazy evaluation
+- **Production Security**: Comprehensive validation and error handling
 
 ---
 
